@@ -13,6 +13,7 @@ import { Service } from 'typedi';
 import { OrderService } from '../services/OrderService';
 import type {
   CreateOrderRequest,
+  CreateOrdersResponse,
   DeleteOrderResponse,
   OrderResponse,
   UpdateOrderRequest,
@@ -23,7 +24,7 @@ import type {
  *
  * GET    /api/v1/orders      -> list orders
  * GET    /api/v1/orders/:id  -> fetch a single order
- * POST   /api/v1/orders      -> create an order
+ * POST   /api/v1/orders      -> create one order per item line in the body
  * PATCH  /api/v1/orders/:id  -> partially update an order
  * DELETE /api/v1/orders/:id  -> delete an order
  *
@@ -46,8 +47,8 @@ export class OrderController {
 
   @Post()
   @HttpCode(201)
-  create(@Body({ required: true }) body: CreateOrderRequest): Promise<OrderResponse> {
-    return this.orderService.createOrder(body);
+  create(@Body({ required: true }) body: CreateOrderRequest): Promise<CreateOrdersResponse> {
+    return this.orderService.createOrders(body);
   }
 
   @Patch('/:id')

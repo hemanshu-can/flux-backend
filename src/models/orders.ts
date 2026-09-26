@@ -18,9 +18,9 @@ export class Order {
   @Column()
   customerId!: ObjectId;
 
-  /** Employee who owns the order. */
+  /** Employee who owns the order, once one has been assigned. */
   @Column()
-  employeeId!: ObjectId;
+  employeeId?: ObjectId;
 
   @Column()
   itemId!: ObjectId;
@@ -31,13 +31,19 @@ export class Order {
   @Column()
   quantity!: number;
 
-  /** Paper stock, e.g. "matte 300gsm". */
+  /**
+   * Paper stock, e.g. "matte 300gsm". Absent when the job was recorded before
+   * its stock was decided — the field is optional, not stored blank.
+   */
   @Column()
-  paperType!: string;
+  paperType?: string;
 
-  /** Sheet size, e.g. "A4" or "12x18". */
+  /**
+   * Sheet size, e.g. "A4" or "12x18". Absent when the job was recorded before
+   * its size was decided.
+   */
   @Column()
-  size!: string;
+  size?: string;
 
   @Column()
   delivered!: boolean;

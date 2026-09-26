@@ -3,9 +3,9 @@ import { BadRequestError, NotFoundError } from 'routing-controllers';
 import { Service } from 'typedi';
 
 import { AppDataSource } from '../data-source';
-import { Customer } from '../models/customers';
+import { Order } from '../models/orders';
 import { Quotation } from '../models/quotations';
-import type { QuotationLine } from '../models/quotations';
+import type { QuotationSplitup } from '../models/quotations';
 import type {
   CreateQuotationRequest,
   DeleteQuotationResponse,
@@ -14,26 +14,61 @@ import type {
 } from '../types/quotation';
 import {
   asRecord,
-  assertReferenceExists,
   rejectUnknownFields,
   requireDate,
   requireNumber,
   requireObjectId,
-  requirePositiveInteger,
   requireString,
 } from './validation';
 
-const FIELD_NAMES = ['customerId', 'splitup', 'tax', 'validUntil', 'notes'] as const;
-const LINE_FIELDS = ['itemId', 'description', 'quantity', 'unitPrice'] as const;
-const TAX_FIELDS = ['rate'] as const;
+const FIELD_NAMES = ['splitup', 'validUntil', 'notes'] as const;
+
+/** POST additionally takes the order the new quotation is tagged to. */
+const CREATE_FIELD_NAMES: readonly string[] = [...FIELD_NAMES, 'orderId'];
+
+/** The buckets a quotation is priced in. Every one is a currency amount. */
+const SPLITUP_FIELDS = [
+  'paper',
+  'designing',
+  'printing',
+  'binding',
+  'others',
+  'specialOthers',
+  'tax',
+] as const;
+
+type SplitupField = (typeof SPLITUP_FIELDS)[number];
+
+/**
+ * The normalized fields a validated request contributes, before buckets are
+ * defaulted. "splitup" holds only the buckets the client actually supplied.
+ */
+interface ValidatedFields {
+  splitup?: Partial<QuotationSplitup>;
+  validUntil?: Date;
+  notes?: string;
+  /** Present on create only: the order the quotation is tagged to. */
+  orderId?: ObjectId;
+}
+
+/** Every bucket at zero, so a stored quotation always carries the full set. */
+const ZERO_SPLITUP: QuotationSplitup = {
+  paper: 0,
+  designing: 0,
+  printing: 0,
+  binding: 0,
+  others: 0,
+  specialOthers: 0,
+  tax: 0,
+};
 
 /**
  * Quotation CRUD: list, read, create, patch and delete quotes in the
  * "quotations" collection.
  *
- * Clients supply the lines, the tax rate and the customer; every amount — each
- * line's amount, the tax amount and the grand total stored as "price" — is
- * derived here so the figures can never disagree with each other.
+ * Clients supply the priced buckets; every figure derived from them — the grand
+ * total stored as "price" — is computed here so it can never disagree with the
+ * buckets it is made of.
  */
 @Service()
 export class QuotationService {
@@ -50,45 +85,61 @@ export class QuotationService {
   }
 
   async createQuotation(input: CreateQuotationRequest): Promise<QuotationResponse> {
-    const values = this.validateFields(input);
+    const values = this.validateFields(input, CREATE_FIELD_NAMES);
 
-    if (values.customerId === undefined) {
-      throw new BadRequestError('"customerId" is required.');
-    }
-    if (values.splitup === undefined || values.splitup.length === 0) {
-      throw new BadRequestError('"splitup" must contain at least one line.');
+    if (values.splitup === undefined) {
+      throw new BadRequestError('"splitup" is required.');
     }
 
-    await assertReferenceExists(Customer, values.customerId, 'customerId', 'customer');
+    const { orderId, splitup, ...rest } = values;
 
+    // The order is resolved before anything is written, so a bad orderId fails
+    // without leaving a quotation behind.
+    const orders = AppDataSource.getRepository(Order);
+    const order = orderId === undefined ? null : await orders.findOne({ where: { _id: orderId } });
+    if (orderId !== undefined && !order) {
+      throw new BadRequestError('"orderId" points at an order that does not exist.');
+    }
+
+    // Buckets left out are stored as zero, so the document always holds all of
+    // them and the total is a sum of the same set every time.
     const quotation = this.repo.create({
-      ...values,
-      tax: values.tax ?? { rate: 0, amount: 0 },
+      ...rest,
+      splitup: { ...ZERO_SPLITUP, ...splitup },
     } as Quotation);
 
     applyTotals(quotation);
-    return toQuotationResponse(await this.repo.save(quotation));
+    const saved = await this.repo.save(quotation);
+
+    // Tagging writes the link onto the order rather than the quotation:
+    // Order.quotationId is what the orders list resolves a price through.
+    // Tagging a second quotation to the same order re-points it, leaving the
+    // first quotation stored but unreferenced.
+    if (order) {
+      order.quotationId = saved._id;
+      await orders.save(order);
+    }
+
+    return toQuotationResponse(saved);
   }
 
   async updateQuotation(id: string, input: UpdateQuotationRequest): Promise<QuotationResponse> {
-    const values = this.validateFields(input);
+    const values = this.validateFields(input, FIELD_NAMES);
     if (Object.keys(values).length === 0) {
       throw new BadRequestError('Provide at least one field to update.');
-    }
-    if (values.splitup !== undefined && values.splitup.length === 0) {
-      throw new BadRequestError('"splitup" must contain at least one line.');
     }
 
     const current = await this.findQuotationById(id);
 
-    if (values.customerId !== undefined && !values.customerId.equals(current.customerId)) {
-      await assertReferenceExists(Customer, values.customerId, 'customerId', 'customer');
+    const { splitup, ...rest } = values;
+    Object.assign(current, rest);
+    // Buckets are merged rather than replaced, so a patch can move one figure
+    // without restating the rest. The total is then recomputed from the whole
+    // merged set.
+    if (splitup !== undefined) {
+      current.splitup = { ...current.splitup, ...splitup };
     }
 
-    Object.assign(current, values);
-
-    // Amounts depend on both the lines and the rate, so recompute from the
-    // merged document rather than from this patch alone.
     applyTotals(current);
     return toQuotationResponse(await this.repo.save(current));
   }
@@ -101,30 +152,31 @@ export class QuotationService {
 
   // ---- validation & normalization ---------------------------------------
 
-  /** Validates a request body and returns the normalized mutable fields. */
-  private validateFields(input: unknown): Partial<Quotation> {
+  /**
+   * Validates a request body and returns the normalized mutable fields.
+   * `allowed` differs between create and patch: only create takes an orderId.
+   */
+  private validateFields(input: unknown, allowed: readonly string[]): ValidatedFields {
     const record = asRecord(input);
-    rejectUnknownFields(record, FIELD_NAMES);
+    rejectUnknownFields(record, allowed);
 
-    const out: Partial<Quotation> = {};
+    const out: ValidatedFields = {};
 
-    if ('customerId' in record) {
-      out.customerId = requireObjectId(record.customerId, 'customerId');
-    }
     if ('splitup' in record) {
-      out.splitup = toValidatedLines(record.splitup);
-    }
-    if ('tax' in record) {
-      const tax = asRecord(record.tax, '"tax"');
-      rejectUnknownFields(tax, TAX_FIELDS);
-      // The amount is derived later; it is never accepted from the client.
-      out.tax = { rate: requireNumber(tax.rate, 'tax.rate'), amount: 0 };
+      const splitup = toValidatedSplitup(record.splitup);
+      if (Object.keys(splitup).length === 0) {
+        throw new BadRequestError('"splitup" must contain at least one bucket.');
+      }
+      out.splitup = splitup;
     }
     if ('validUntil' in record) {
       out.validUntil = requireDate(record.validUntil, 'validUntil');
     }
     if ('notes' in record) {
       out.notes = requireString(record.notes, 'notes');
+    }
+    if ('orderId' in record) {
+      out.orderId = requireObjectId(record.orderId, 'orderId');
     }
 
     return out;
@@ -142,29 +194,22 @@ export class QuotationService {
   }
 }
 
-/** Validates the priced lines. Amounts are filled in later by applyTotals. */
-function toValidatedLines(value: unknown): QuotationLine[] {
-  if (!Array.isArray(value)) {
-    throw new BadRequestError('"splitup" must be an array of lines.');
+/** Validates the priced buckets. Only the buckets present are returned. */
+function toValidatedSplitup(value: unknown): Partial<QuotationSplitup> {
+  const record = asRecord(value, '"splitup"');
+  rejectUnknownFields(record, SPLITUP_FIELDS, '"splitup"');
+
+  const out: Partial<QuotationSplitup> = {};
+  for (const field of SPLITUP_FIELDS) {
+    if (field in record) {
+      (out as Record<SplitupField, number>)[field] = requireNumber(
+        record[field],
+        `splitup.${field}`,
+      );
+    }
   }
 
-  return value.map((line, index) => {
-    const record = asRecord(line, `"splitup[${index}]"`);
-    rejectUnknownFields(record, LINE_FIELDS);
-
-    const parsed: QuotationLine = {
-      description: requireString(record.description, `splitup[${index}].description`),
-      quantity: requirePositiveInteger(record.quantity, `splitup[${index}].quantity`),
-      unitPrice: requireNumber(record.unitPrice, `splitup[${index}].unitPrice`),
-      amount: 0,
-    };
-
-    if (record.itemId !== undefined) {
-      parsed.itemId = requireObjectId(record.itemId, `splitup[${index}].itemId`);
-    }
-
-    return parsed;
-  });
+  return out;
 }
 
 /** Rounds to 2 decimals so repeated arithmetic cannot accumulate float noise. */
@@ -172,34 +217,17 @@ function round2(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
-/** Recomputes line amounts, the tax amount and the grand total, in place. */
+/** Recomputes the grand total as the sum of the buckets, in place. */
 function applyTotals(quotation: Quotation): void {
-  quotation.splitup = quotation.splitup.map((line) => ({
-    ...line,
-    amount: round2(line.quantity * line.unitPrice),
-  }));
-
-  const subtotal = quotation.splitup.reduce((sum, line) => sum + line.amount, 0);
-  quotation.tax = {
-    rate: quotation.tax.rate,
-    amount: round2((subtotal * quotation.tax.rate) / 100),
-  };
-  quotation.price = round2(subtotal + quotation.tax.amount);
+  const total = SPLITUP_FIELDS.reduce((sum, field) => sum + quotation.splitup[field], 0);
+  quotation.price = round2(total);
 }
 
 /** Maps a stored Quotation to the JSON shape returned by the API. */
 function toQuotationResponse(quotation: Quotation): QuotationResponse {
   return {
     id: quotation._id.toHexString(),
-    customerId: quotation.customerId.toHexString(),
-    splitup: quotation.splitup.map((line) => ({
-      itemId: line.itemId?.toHexString(),
-      description: line.description,
-      quantity: line.quantity,
-      unitPrice: line.unitPrice,
-      amount: line.amount,
-    })),
-    tax: { rate: quotation.tax.rate, amount: quotation.tax.amount },
+    splitup: { ...quotation.splitup },
     price: quotation.price,
     validUntil: quotation.validUntil?.toISOString(),
     notes: quotation.notes,

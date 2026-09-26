@@ -31,14 +31,21 @@ export function asRecord(input: unknown, label = 'Request body'): Record<string,
   return input as Record<string, unknown>;
 }
 
-/** Rejects keys outside `allowed`, so unexpected fields cannot reach the database. */
+/**
+ * Rejects keys outside `allowed`, so unexpected fields cannot reach the database.
+ * Pass `label` when the record is one of several in a request — an unnamed
+ * unknown field is hard to place in a batch of fifty.
+ */
 export function rejectUnknownFields(
   record: Record<string, unknown>,
   allowed: readonly string[],
+  label?: string,
 ): void {
   for (const key of Object.keys(record)) {
     if (!allowed.includes(key)) {
-      throw new BadRequestError(`Unknown field "${key}".`);
+      throw new BadRequestError(
+        label ? `Unknown field "${key}" in ${label}.` : `Unknown field "${key}".`,
+      );
     }
   }
 }

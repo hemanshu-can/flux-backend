@@ -27,8 +27,8 @@ import type {
  * PATCH  /api/v1/quotations/:id  -> partially update a quotation
  * DELETE /api/v1/quotations/:id  -> delete a quotation
  *
- * Line amounts, tax and the grand total are computed server-side, so they are
- * not accepted in the request body.
+ * The grand total is computed server-side as the sum of the price buckets, so
+ * it is not accepted in the request body.
  *
  * HTTP concerns only; business logic lives in QuotationService.
  */

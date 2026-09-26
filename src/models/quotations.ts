@@ -1,30 +1,26 @@
 import { ObjectId } from 'mongodb';
 import { Column, Entity, ObjectIdColumn } from 'typeorm';
 
-/** One priced line of a quotation, as stored. */
-export interface QuotationLine {
-  /** Item this line prices, when the line maps to a catalogue item. */
-  itemId?: ObjectId;
-  description: string;
-  quantity: number;
-  unitPrice: number;
-  /** quantity * unitPrice, rounded to 2 decimals. Derived by QuotationService. */
-  amount: number;
-}
-
-/** Tax applied to a quotation, as stored. */
-export interface QuotationTax {
-  /** Percentage, e.g. 18 for 18% GST. */
-  rate: number;
-  /** Tax amount. Derived by QuotationService. */
-  amount: number;
+/**
+ * The priced buckets a quotation is broken into, as stored.
+ *
+ * Every value is a currency amount. "tax" is the tax amount itself, not a rate.
+ */
+export interface QuotationSplitup {
+  paper: number;
+  designing: number;
+  printing: number;
+  binding: number;
+  others: number;
+  specialOthers: number;
+  tax: number;
 }
 
 /**
  * A quotation sent to a customer. Stored in the "quotations" MongoDB collection.
  *
- * Line amounts, tax.amount and price are all derived by QuotationService and are
- * never accepted from the client.
+ * "price" is derived by QuotationService as the sum of every splitup value, so
+ * it is never accepted from the client.
  */
 @Entity('quotations')
 export class Quotation {
@@ -32,15 +28,9 @@ export class Quotation {
   _id!: ObjectId;
 
   @Column()
-  customerId!: ObjectId;
+  splitup!: QuotationSplitup;
 
-  @Column()
-  splitup!: QuotationLine[];
-
-  @Column()
-  tax!: QuotationTax;
-
-  /** Grand total: sum(splitup.amount) + tax.amount. */
+  /** Grand total: the sum of every value in splitup, tax included. */
   @Column()
   price!: number;
 
