@@ -12,15 +12,23 @@ export type ItemConfiguration = Record<string, unknown>;
 /** Fields a client may set when creating or editing an item. */
 export interface ItemInput {
   name: string;
-  /** Printing price per sheet, in the business currency unit. */
-  printingPricePerSheet: number;
-  /** One-off designing charge per sheet, in the business currency unit. */
-  designingChargePerSheet: number;
+  /** Printing price per sheet, in the business currency unit. Optional. */
+  printingPricePerSheet?: number;
+  /** One-off designing charge per sheet, in the business currency unit. Optional. */
+  designingChargePerSheet?: number;
   configuration?: ItemConfiguration;
 }
 
 /** Body of POST /api/v1/items. */
 export type CreateItemRequest = ItemInput;
+
+/**
+ * Body of POST /api/v1/items/bulk — one item per entry. The envelope matches
+ * CreateOrderRequest's `items` key so the two batch endpoints read alike.
+ */
+export interface CreateItemsRequest {
+  items: ItemInput[];
+}
 
 /** Body of PATCH /api/v1/items/:id — only provided fields are updated. */
 export type UpdateItemRequest = Partial<ItemInput>;
@@ -29,10 +37,13 @@ export type UpdateItemRequest = Partial<ItemInput>;
 export interface ItemResponse {
   id: string;
   name: string;
-  printingPricePerSheet: number;
-  designingChargePerSheet: number;
+  printingPricePerSheet?: number;
+  designingChargePerSheet?: number;
   configuration?: ItemConfiguration;
 }
+
+/** Response of POST /api/v1/items/bulk: the items created, in request order. */
+export type CreateItemsResponse = ItemResponse[];
 
 /** Response of DELETE /api/v1/items/:id. */
 export interface DeleteItemResponse {

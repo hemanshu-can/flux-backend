@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import express from 'express';
 import { useContainer, useExpressServer } from 'routing-controllers';
 import { Container } from 'typedi';
+import { ChatbotController } from './controllers/ChatbotController';
 import { CustomerController } from './controllers/CustomerController';
 import { EmployeeController } from './controllers/EmployeeController';
 import { HealthController } from './controllers/HealthController';
@@ -26,6 +27,7 @@ export function createApp(): express.Express {
       QuotationController,
       OutsourcingPartnerController,
       HealthController,
+      ChatbotController,
     ],
     defaultErrorHandler: true,
     // The flux frontend is served from a different origin (the Vite dev server on

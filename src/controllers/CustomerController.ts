@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  QueryParam,
 } from 'routing-controllers';
 import { Service } from 'typedi';
 
@@ -22,6 +23,7 @@ import type {
  * Customer endpoints under /api/v1/customers.
  *
  * GET    /api/v1/customers      -> list customers
+ * GET    /api/v1/customers/search?q=  -> search by name, contact, email or company
  * GET    /api/v1/customers/:id  -> fetch a single customer
  * POST   /api/v1/customers      -> create a customer
  * PATCH  /api/v1/customers/:id  -> partially update a customer
@@ -37,6 +39,15 @@ export class CustomerController {
   @Get()
   list(): Promise<CustomerResponse[]> {
     return this.customerService.listCustomers();
+  }
+
+  /**
+   * Declared before getOne so the static /search path is registered ahead of
+   * the /:id pattern; otherwise "search" would be taken for a customer id.
+   */
+  @Get('/search')
+  search(@QueryParam('q') q: string): Promise<CustomerResponse[]> {
+    return this.customerService.searchCustomers(q);
   }
 
   @Get('/:id')

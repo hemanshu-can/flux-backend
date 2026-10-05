@@ -17,13 +17,13 @@ export class Item {
   @Column()
   name!: string;
 
-  /** Printing price per sheet. */
+  /** Printing price per sheet. Optional — an item may exist before it is priced. */
   @Column()
-  printingPricePerSheet!: number;
+  printingPricePerSheet?: number;
 
-  /** One-off designing charge per sheet. */
+  /** One-off designing charge per sheet. Optional. */
   @Column()
-  designingChargePerSheet!: number;
+  designingChargePerSheet?: number;
 
   /** Product-specific configuration, e.g. available sizes and finishes. */
   @Column()

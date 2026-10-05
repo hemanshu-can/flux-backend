@@ -1,6 +1,7 @@
 import { ObjectId } from 'mongodb';
 import { BadRequestError, NotFoundError } from 'routing-controllers';
 import { Service } from 'typedi';
+import type { FindManyOptions } from 'typeorm';
 
 import { AppDataSource } from '../data-source';
 import { Customer } from '../models/customers';
@@ -49,6 +50,34 @@ export class CustomerService {
 
   async getCustomer(id: string): Promise<CustomerResponse> {
     return toCustomerResponse(await this.findCustomerById(id));
+  }
+
+  /**
+   * Case-insensitive partial search: a customer matches when any one of the
+   * fields it can be identified by — name, contact, email or company name —
+   * contains the search term.
+   */
+  async searchCustomers(term: string): Promise<CustomerResponse[]> {
+    const query = typeof term === 'string' ? term.trim() : '';
+    if (query === '') {
+      throw new BadRequestError('"q" is required.');
+    }
+
+    // MongoDB takes the WHERE clause as-is, so an $or over the four fields is
+    // what the driver receives. The pattern is escaped to match the term
+    // literally rather than as a regular expression.
+    const pattern = new RegExp(escapeRegExp(query), 'i');
+    const where = {
+      $or: [
+        { name: pattern },
+        { contact: pattern },
+        { email: pattern },
+        { companyName: pattern },
+      ],
+    };
+
+    const customers = await this.repo.find({ where } as FindManyOptions<Customer>);
+    return customers.map(toCustomerResponse);
   }
 
   async createCustomer(input: CreateCustomerRequest): Promise<CustomerResponse> {
@@ -124,6 +153,14 @@ export class CustomerService {
     }
     return customer;
   }
+}
+
+/**
+ * Escapes regular-expression metacharacters so a search term is matched as
+ * literal text — searching for "a+b" must not read "+" as a quantifier.
+ */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
